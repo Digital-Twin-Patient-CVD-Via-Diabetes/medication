@@ -7,7 +7,10 @@ from typing import Dict
 import requests
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
@@ -72,12 +75,19 @@ Now output for: {med_name}
     headers = {'Content-Type': 'application/json'}
 
     logger.info(f"Requesting medication info for: {med_name}")
-    response = requests.post(endpoint, params=params, headers=headers, json=payload)
-    
-    if not response.ok:
-        error_msg = f"API returned status {response.status_code}: {response.text}"
+    try:
+        response = requests.post(
+            endpoint,
+            params=params,
+            headers=headers,
+            json=payload,
+            timeout=10  # Add timeout to prevent hanging
+        )
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        error_msg = f"API request failed: {str(e)}"
         logger.error(error_msg)
-        raise RuntimeError(error_msg)
+        raise RuntimeError(error_msg) from e
     
     data = response.json()
 
@@ -94,12 +104,11 @@ Now output for: {med_name}
     try:
         info_dict = ast.literal_eval(raw_text)
         logger.info(f"Successfully parsed response for {med_name}")
+        return info_dict
     except Exception as e:
         error_msg = f"Failed to parse dict from model output: {raw_text}\nError: {e}"
         logger.error(error_msg)
         raise ValueError(error_msg) from e
-
-    return info_dict
 
 @app.post("/medication-info", response_model=MedicationResponse)
 async def medication_info(request: MedicationRequest):
@@ -114,14 +123,22 @@ async def medication_info(request: MedicationRequest):
         return info
     except Exception as e:
         logger.error(f"Error processing request for {request.med_name}: {str(e)}")
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not retrieve medication information: {str(e)}"
+        )
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
     logger.info("Health check requested")
-    return {"status": "healthy"}
+    return {"status": "healthy", "version": app.version}
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "8000")),
+        log_level="info"
+    )
